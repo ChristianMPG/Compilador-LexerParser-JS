@@ -66,6 +66,35 @@ class Lexer:
                 self.indice = m.end()
                 continue
 
+            # Detección de string no cerrado: si el caracter actual es comilla pero no matchea STRING
+            c_actual = self.codigo_fuente[self.indice]
+            if c_actual in ("'", '"'):
+                # Intentamos encontrar el cierre respetando escapes simples
+                comilla = c_actual
+                i = self.indice + 1
+                escapado = False
+                cerrado = False
+                while i < self.longitud:
+                    ch = self.codigo_fuente[i]
+                    if ch == "\n" and not escapado:
+                        break
+                    if escapado:
+                        escapado = False
+                    elif ch == "\\":
+                        escapado = True
+                    elif ch == comilla:
+                        cerrado = True
+                        break
+                    i += 1
+                if not cerrado:
+                    # String no cerrado: emitimos error y avanzamos hasta fin de línea o EOF
+                    self.tokens.append(Token("ERROR", "STRING_NO_CERRADA", inicio_linea, inicio_columna))
+                    # Avanzamos hasta fin de línea o EOF actualizando líneas/columnas
+                    while self.indice < self.longitud and self.codigo_fuente[self.indice] != "\n":
+                        self.indice += 1
+                        self.columna += 1
+                    continue
+
             # Comentario de línea
             m = self.patrones["LINE_COMMENT"].match(self.codigo_fuente, self.indice)
             if m:

@@ -1,3 +1,6 @@
 function saludar() {
-    console.log("Hola mundo");
+    consle.log("Hola mundo");
 }
+
+//Prueba error: quitar function 
+    

@@ -33,4 +33,4 @@ class Compilador:
                 print(e)
 
 if __name__ == "__main__":
-    Compilador("samples/ejemplo.js").ejecutar()
+    Compilador("samples/suma.js").ejecutar()

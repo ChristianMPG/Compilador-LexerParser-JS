@@ -35,6 +35,12 @@ class Parser:
         self.pos += 1
         return token
 
+    def _mirar(self, offset):
+        idx = self.pos + offset
+        if 0 <= idx < len(self.tokens):
+            return self.tokens[idx]
+        return self.tokens[-1]
+
     def _coincide(self, tipo=None, valor=None):
         token = self._actual()
         if tipo is not None and token.tipo != tipo:
@@ -51,6 +57,26 @@ class Parser:
         self.errores.append(f"{mensaje} en linea {token.linea}, columna {token.columna}: se esperaba {tipo or valor} y se obtuvo {token.tipo}:{token.valor}")
         return self._avanzar()
 
+    def _sincronizar(self):
+        # Avanza hasta un límite de sentencia para evitar errores en cascada
+        while self._actual().tipo != "EOF":
+            tok = self._actual()
+            if tok.tipo == "PUNCT" and tok.valor in {";", "}"}:
+                break
+            self._avanzar()
+
+    def _esperar_punto_y_coma(self):
+        # Exige ';', reporta y sincroniza si falta
+        tok = self._actual()
+        if tok.tipo == "PUNCT" and tok.valor == ";":
+            self._avanzar()
+        else:
+            self.errores.append(f"Se esperaba ';' en linea {tok.linea}, columna {tok.columna}: se obtuvo {tok.tipo}:{tok.valor}")
+            self._sincronizar()
+            # Si hemos sincronizado y estamos en ';', consumirlo para continuar limpio
+            if self._actual().tipo == "PUNCT" and self._actual().valor == ";":
+                self._avanzar()
+
     def parsear(self):
         # Inicia el análisis sintáctico y construye el árbol sintáctico
         programa = NodoAST("Program")
@@ -62,11 +88,23 @@ class Parser:
             elif tok.tipo == "KEYWORD" and tok.valor in {"var", "let", "const"}:
                 nodo = self.parsear_declaracion()
             else:
-                # Como fallback, intentamos parsear una expresión simple seguida de ";"
-                expr = self.parsear_expresion()
-                self._coincide("PUNCT", ";")
-                nodo = NodoAST("ExpressionStatement")
-                nodo.agregar_hijo(expr)
+                # Detección de patrón de función sin 'function': IDENT ( ) { ... }
+                if (
+                    tok.tipo == "IDENT"
+                    and self._mirar(1).tipo == "PUNCT" and self._mirar(1).valor == "("
+                    and self._mirar(2).tipo == "PUNCT" and self._mirar(2).valor == ")"
+                    and self._mirar(3).tipo == "PUNCT" and self._mirar(3).valor == "{"
+                ):
+                    self.errores.append(
+                        f"Se esperaba 'function' antes del nombre de funcion en linea {tok.linea}, columna {tok.columna}"
+                    )
+                    nodo = self._parsear_funcion_sin_keyword()
+                else:
+                    # Como fallback, intentamos parsear una expresión simple seguida de ";"
+                    expr = self.parsear_expresion()
+                    self._esperar_punto_y_coma()
+                    nodo = NodoAST("ExpressionStatement")
+                    nodo.agregar_hijo(expr)
             programa.agregar_hijo(nodo)
         self.arbol = programa
         return programa
@@ -83,13 +121,13 @@ class Parser:
             init_node = NodoAST("Initializer")
             init_node.agregar_hijo(expr)
             decl.agregar_hijo(init_node)
-        self._coincide("PUNCT", ";")
+        self._esperar_punto_y_coma()
         return decl
 
     def parsear_expresion(self):
         # Analiza expresiones aritméticas (e.g., 5 + 2 * 3)
         # Debe manejar precedencia y asociatividad
-        # Implementamos precedencia: multiplicacion/division > suma/resta
+        # Implementamos precedencia: llamadas/miembros > multiplicacion/division > suma/resta
         def parsear_primaria():
             tok = self._actual()
             if self._coincide("NUMBER"):
@@ -117,13 +155,47 @@ class Parser:
                 return nodo
             return parsear_primaria()
 
-        def parsear_mul_div():
+        def parsear_postfijo():
             nodo = parsear_unaria()
+            while True:
+                tok = self._actual()
+                # Acceso a miembro: expr . IDENT
+                if tok.tipo == "PUNCT" and tok.valor == ".":
+                    self._avanzar()
+                    ident = self._esperar("IDENT", None, "Se esperaba identificador despues de '.'")
+                    miembro = NodoAST("MemberExpression")
+                    miembro.agregar_hijo(nodo)
+                    miembro.agregar_hijo(NodoAST("Identifier", ident.valor))
+                    nodo = miembro
+                    continue
+                # Llamada: expr ( args )
+                if tok.tipo == "PUNCT" and tok.valor == "(":
+                    self._avanzar()
+                    call = NodoAST("CallExpression")
+                    call.agregar_hijo(nodo)
+                    args_parent = NodoAST("Arguments")
+                    # Argumentos separados por comas
+                    if not (self._actual().tipo == "PUNCT" and self._actual().valor == ")"):
+                        arg = parsear_suma_resta()
+                        args_parent.agregar_hijo(arg)
+                        while self._actual().tipo == "PUNCT" and self._actual().valor == ",":
+                            self._avanzar()
+                            arg = parsear_suma_resta()
+                            args_parent.agregar_hijo(arg)
+                    self._esperar("PUNCT", ")", "Se esperaba ')'")
+                    call.agregar_hijo(args_parent)
+                    nodo = call
+                    continue
+                break
+            return nodo
+
+        def parsear_mul_div():
+            nodo = parsear_postfijo()
             while True:
                 tok = self._actual()
                 if tok.tipo == "PUNCT" and tok.valor in {"*", "/", "%"}:
                     op = self._avanzar()
-                    derecho = parsear_unaria()
+                    derecho = parsear_postfijo()
                     nuevo = NodoAST("BinaryExpression", op.valor)
                     nuevo.agregar_hijo(nodo)
                     nuevo.agregar_hijo(derecho)
@@ -157,25 +229,51 @@ class Parser:
         # Para simplificar, no parseamos parametros en este subconjunto
         self._esperar("PUNCT", ")", "Se esperaba ')'")
         self._esperar("PUNCT", "{", "Se esperaba '{'")
-        # Parseo de bloque: en este subconjunto, consumimos hasta la '}' correspondiente
-        bloque = NodoAST("Block")
-        nivel = 1
-        while self._actual().tipo != "EOF" and nivel > 0:
-            tok = self._actual()
-            if tok.tipo == "PUNCT" and tok.valor == "{":
-                nivel += 1
-            elif tok.tipo == "PUNCT" and tok.valor == "}":
-                nivel -= 1
-                if nivel == 0:
-                    self._avanzar()  # consumir '}' final
-                    break
-            # Como representacion, agregamos tokens del cuerpo como nodos hoja 'Token'
-            if nivel > 0:
-                self._avanzar()
+        bloque = self._parsear_bloque()
         func = NodoAST("FunctionDeclaration")
         func.agregar_hijo(NodoAST("Identifier", nombre.valor))
         func.agregar_hijo(bloque)
         return func
+
+    def _parsear_funcion_sin_keyword(self):
+        # Variante: parsea IDENT () { ... } reportando previamente el error de falta de 'function'
+        nombre = self._esperar("IDENT", None, "Se esperaba nombre de funcion")
+        self._esperar("PUNCT", "(", "Se esperaba '('")
+        self._esperar("PUNCT", ")", "Se esperaba ')'")
+        self._esperar("PUNCT", "{", "Se esperaba '{'")
+        bloque = self._parsear_bloque()
+        func = NodoAST("FunctionDeclaration")
+        func.agregar_hijo(NodoAST("Identifier", nombre.valor))
+        func.agregar_hijo(bloque)
+        return func
+
+    def _parsear_bloque(self):
+        # Parsea sentencias hasta la '}' correspondiente y devuelve un NodoAST("Block") poblado
+        bloque = NodoAST("Block")
+        cerro_bloque = False
+        while self._actual().tipo != "EOF":
+            tok = self._actual()
+            if tok.tipo == "PUNCT" and tok.valor == "}":
+                self._avanzar()
+                cerro_bloque = True
+                break
+            if tok.tipo == "KEYWORD" and tok.valor in {"var", "let", "const"}:
+                stmt = self.parsear_declaracion()
+                bloque.agregar_hijo(stmt)
+                continue
+            if tok.tipo == "KEYWORD" and tok.valor == "function":
+                stmt = self.parsear_funcion()
+                bloque.agregar_hijo(stmt)
+                continue
+            expr = self.parsear_expresion()
+            self._esperar_punto_y_coma()
+            stmt = NodoAST("ExpressionStatement")
+            stmt.agregar_hijo(expr)
+            bloque.agregar_hijo(stmt)
+        if not cerro_bloque:
+            tok = self._actual()
+            self.errores.append(f"Se esperaba '}}' para cerrar bloque en linea {tok.linea}, columna {tok.columna}")
+        return bloque
 
     def detectar_errores(self):
         # Detecta errores sintácticos y los almacena para mostrar al usuario
