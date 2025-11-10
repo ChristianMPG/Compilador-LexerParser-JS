@@ -68,8 +68,13 @@ class Parser:
     def _esperar_punto_y_coma(self):
         # Exige ';', reporta y sincroniza si falta
         tok = self._actual()
-        if tok.tipo == "PUNCT" and tok.valor == ";":
-            self._avanzar()
+        if tok.tipo == "PUNCT":
+            if tok.valor == ";":
+                self._avanzar()
+                return
+            if tok.valor == "}":
+                # Permitimos omitir ';' antes de cerrar el bloque
+                return
         else:
             self.errores.append(f"Se esperaba ';' en linea {tok.linea}, columna {tok.columna}: se obtuvo {tok.tipo}:{tok.valor}")
             self._sincronizar()
@@ -83,6 +88,10 @@ class Parser:
         while self._actual().tipo != "EOF":
             nodo = None
             tok = self._actual()
+            if tok.tipo == "PUNCT" and tok.valor == ";":
+                # Permite sentencias vacías (por ejemplo ';' después de una declaración)
+                self._avanzar()
+                continue
             if tok.tipo == "KEYWORD" and tok.valor == "function":
                 nodo = self.parsear_funcion()
             elif tok.tipo == "KEYWORD" and tok.valor in {"var", "let", "const"}:
@@ -114,7 +123,11 @@ class Parser:
         kw = self._esperar("KEYWORD", None, "Se esperaba palabra clave de declaracion")
         ident = self._esperar("IDENT", None, "Se esperaba identificador de variable")
         decl = NodoAST("VariableDeclaration", kw.valor)
-        id_node = NodoAST("Identifier", ident.valor)
+        id_node = (
+            NodoAST("Identifier", ident.valor)
+            if ident.tipo == "IDENT"
+            else NodoAST("InvalidIdentifier", ident.valor)
+        )
         decl.agregar_hijo(id_node)
         if self._coincide("PUNCT", "="):
             expr = self.parsear_expresion()
