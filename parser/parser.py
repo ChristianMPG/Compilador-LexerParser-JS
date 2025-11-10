@@ -1,9 +1,11 @@
 # Clase NodoAST
 class NodoAST:
-    def __init__(self, tipo, valor=None):
+    def __init__(self, tipo, valor=None, linea=None, columna=None):
         self.tipo = tipo
         self.valor = valor
         self.hijos = []
+        self.linea = linea
+        self.columna = columna
 
     def agregar_hijo(self, nodo):
         self.hijos.append(nodo)
@@ -84,7 +86,8 @@ class Parser:
 
     def parsear(self):
         # Inicia el análisis sintáctico y construye el árbol sintáctico
-        programa = NodoAST("Program")
+        tok_program = self._actual()
+        programa = NodoAST("Program", linea=tok_program.linea, columna=tok_program.columna)
         while self._actual().tipo != "EOF":
             nodo = None
             tok = self._actual()
@@ -112,7 +115,11 @@ class Parser:
                     # Como fallback, intentamos parsear una expresión simple seguida de ";"
                     expr = self.parsear_expresion()
                     self._esperar_punto_y_coma()
-                    nodo = NodoAST("ExpressionStatement")
+                    nodo = NodoAST(
+                        "ExpressionStatement",
+                        linea=expr.linea if hasattr(expr, "linea") else tok.linea,
+                        columna=expr.columna if hasattr(expr, "columna") else tok.columna,
+                    )
                     nodo.agregar_hijo(expr)
             programa.agregar_hijo(nodo)
         self.arbol = programa
@@ -122,11 +129,11 @@ class Parser:
         # Analiza una declaración de variable (e.g., var x = 5;)
         kw = self._esperar("KEYWORD", None, "Se esperaba palabra clave de declaracion")
         ident = self._esperar("IDENT", None, "Se esperaba identificador de variable")
-        decl = NodoAST("VariableDeclaration", kw.valor)
+        decl = NodoAST("VariableDeclaration", kw.valor, linea=kw.linea, columna=kw.columna)
         id_node = (
-            NodoAST("Identifier", ident.valor)
+            NodoAST("Identifier", ident.valor, linea=ident.linea, columna=ident.columna)
             if ident.tipo == "IDENT"
-            else NodoAST("InvalidIdentifier", ident.valor)
+            else NodoAST("InvalidIdentifier", ident.valor, linea=ident.linea, columna=ident.columna)
         )
         decl.agregar_hijo(id_node)
         if self._coincide("PUNCT", "="):
@@ -144,11 +151,11 @@ class Parser:
         def parsear_primaria():
             tok = self._actual()
             if self._coincide("NUMBER"):
-                return NodoAST("NumberLiteral", tok.valor)
+                return NodoAST("NumberLiteral", tok.valor, linea=tok.linea, columna=tok.columna)
             if self._coincide("STRING"):
-                return NodoAST("StringLiteral", tok.valor)
+                return NodoAST("StringLiteral", tok.valor, linea=tok.linea, columna=tok.columna)
             if self._coincide("IDENT"):
-                return NodoAST("Identifier", tok.valor)
+                return NodoAST("Identifier", tok.valor, linea=tok.linea, columna=tok.columna)
             if self._coincide("PUNCT", "("):
                 expr = parsear_suma_resta()
                 self._esperar("PUNCT", ")", "Se esperaba ')'")
@@ -176,17 +183,17 @@ class Parser:
                 if tok.tipo == "PUNCT" and tok.valor == ".":
                     self._avanzar()
                     ident = self._esperar("IDENT", None, "Se esperaba identificador despues de '.'")
-                    miembro = NodoAST("MemberExpression")
+                    miembro = NodoAST("MemberExpression", linea=tok.linea, columna=tok.columna)
                     miembro.agregar_hijo(nodo)
-                    miembro.agregar_hijo(NodoAST("Identifier", ident.valor))
+                    miembro.agregar_hijo(NodoAST("Identifier", ident.valor, linea=ident.linea, columna=ident.columna))
                     nodo = miembro
                     continue
                 # Llamada: expr ( args )
                 if tok.tipo == "PUNCT" and tok.valor == "(":
                     self._avanzar()
-                    call = NodoAST("CallExpression")
+                    call = NodoAST("CallExpression", linea=tok.linea, columna=tok.columna)
                     call.agregar_hijo(nodo)
-                    args_parent = NodoAST("Arguments")
+                    args_parent = NodoAST("Arguments", linea=tok.linea, columna=tok.columna)
                     # Argumentos separados por comas
                     if not (self._actual().tipo == "PUNCT" and self._actual().valor == ")"):
                         arg = parsear_suma_resta()
@@ -236,33 +243,35 @@ class Parser:
 
     def parsear_funcion(self):
         # Analiza una declaración de función (e.g., function foo() { ... })
-        self._esperar("KEYWORD", "function", "Se esperaba 'function'")
+        token_func = self._esperar("KEYWORD", "function", "Se esperaba 'function'")
         nombre = self._esperar("IDENT", None, "Se esperaba nombre de funcion")
         self._esperar("PUNCT", "(", "Se esperaba '('")
         # Para simplificar, no parseamos parametros en este subconjunto
         self._esperar("PUNCT", ")", "Se esperaba ')'")
         self._esperar("PUNCT", "{", "Se esperaba '{'")
         bloque = self._parsear_bloque()
-        func = NodoAST("FunctionDeclaration")
-        func.agregar_hijo(NodoAST("Identifier", nombre.valor))
+        func = NodoAST("FunctionDeclaration", linea=token_func.linea, columna=token_func.columna)
+        func.agregar_hijo(NodoAST("Identifier", nombre.valor, linea=nombre.linea, columna=nombre.columna))
         func.agregar_hijo(bloque)
         return func
 
     def _parsear_funcion_sin_keyword(self):
         # Variante: parsea IDENT () { ... } reportando previamente el error de falta de 'function'
+        token_name = self._actual()
         nombre = self._esperar("IDENT", None, "Se esperaba nombre de funcion")
         self._esperar("PUNCT", "(", "Se esperaba '('")
         self._esperar("PUNCT", ")", "Se esperaba ')'")
         self._esperar("PUNCT", "{", "Se esperaba '{'")
         bloque = self._parsear_bloque()
-        func = NodoAST("FunctionDeclaration")
-        func.agregar_hijo(NodoAST("Identifier", nombre.valor))
+        func = NodoAST("FunctionDeclaration", linea=token_name.linea, columna=token_name.columna)
+        func.agregar_hijo(NodoAST("Identifier", nombre.valor, linea=nombre.linea, columna=nombre.columna))
         func.agregar_hijo(bloque)
         return func
 
     def _parsear_bloque(self):
         # Parsea sentencias hasta la '}' correspondiente y devuelve un NodoAST("Block") poblado
-        bloque = NodoAST("Block")
+        tok_block = self._actual()
+        bloque = NodoAST("Block", linea=tok_block.linea, columna=tok_block.columna)
         cerro_bloque = False
         while self._actual().tipo != "EOF":
             tok = self._actual()
@@ -280,7 +289,11 @@ class Parser:
                 continue
             expr = self.parsear_expresion()
             self._esperar_punto_y_coma()
-            stmt = NodoAST("ExpressionStatement")
+            stmt = NodoAST(
+                "ExpressionStatement",
+                linea=getattr(expr, "linea", tok.linea),
+                columna=getattr(expr, "columna", tok.columna),
+            )
             stmt.agregar_hijo(expr)
             bloque.agregar_hijo(stmt)
         if not cerro_bloque:

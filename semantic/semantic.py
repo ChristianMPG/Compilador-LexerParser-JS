@@ -131,7 +131,7 @@ class SemanticAnalyzer:
         name = name_node.valor
         symbol = Symbol(name=name, kind="function", data_type="function", mutable=False, node=node)
         if not scope.define(symbol):
-            self._error(f"La funcion '{name}' ya fue declarada en el ambito '{scope.scope_name}'")
+            self._error(f"La funcion '{name}' ya fue declarada en el ambito '{scope.scope_name}'", node)
         func_scope = scope.create_child(f"func:{name}")
         self._all_scopes.append(func_scope)
         if block_node:
@@ -165,10 +165,11 @@ class SemanticAnalyzer:
             prev = scope.symbols[var_name]
             if prev.data_type != symbol.data_type and prev.data_type != "unknown":
                 self._error(
-                    f"La variable '{var_name}' ya declarada como '{prev.data_type}' no puede redeclararse con tipo '{symbol.data_type}'"
+                    f"La variable '{var_name}' ya declarada como '{prev.data_type}' no puede redeclararse con tipo '{symbol.data_type}'",
+                    node,
                 )
             else:
-                self._error(f"La variable '{var_name}' ya fue declarada en el ambito '{scope.scope_name}'")
+                self._error(f"La variable '{var_name}' ya fue declarada en el ambito '{scope.scope_name}'", node)
         return symbol.data_type
 
     def _visit_ExpressionStatement(self, node, scope):
@@ -183,11 +184,12 @@ class SemanticAnalyzer:
         right_type = self._visit(node.hijos[1], scope)
         op = node.valor
         if op == "/" and self._is_zero(node.hijos[1]):
-            self._error("Division por cero detectada en tiempo de compilacion")
+            self._error("Division por cero detectada en tiempo de compilacion", node.hijos[1])
         if op in self.NUMERIC_OPS:
             if not self._is_numeric(left_type) or not self._is_numeric(right_type):
                 self._error(
-                    f"Operador '{op}' requiere operandos numericos, se recibieron '{left_type}' y '{right_type}'"
+                    f"Operador '{op}' requiere operandos numericos, se recibieron '{left_type}' y '{right_type}'",
+                    node,
                 )
                 return "error"
             return "number"
@@ -197,7 +199,8 @@ class SemanticAnalyzer:
             if self._is_numeric(left_type) and self._is_numeric(right_type):
                 return "number"
             self._error(
-                f"No se puede sumar/concatenar tipos incompatibles '{left_type}' y '{right_type}'"
+                f"No se puede sumar/concatenar tipos incompatibles '{left_type}' y '{right_type}'",
+                node,
             )
             return "error"
         return "unknown"
@@ -206,7 +209,7 @@ class SemanticAnalyzer:
         operand_type = self._visit(node.hijos[0], scope) if node.hijos else "unknown"
         op = node.valor
         if op in {"+", "-"} and not self._is_numeric(operand_type):
-            self._error(f"El operador unario '{op}' solo acepta numeros, se recibio '{operand_type}'")
+            self._error(f"El operador unario '{op}' solo acepta numeros, se recibio '{operand_type}'", node)
             return "error"
         if op == "!":
             return "boolean"
@@ -221,7 +224,7 @@ class SemanticAnalyzer:
     def _visit_Identifier(self, node, scope):
         symbol = scope.resolve(node.valor)
         if symbol is None:
-            self._error(f"El identificador '{node.valor}' no ha sido declarado")
+            self._error(f"El identificador '{node.valor}' no ha sido declarado", node)
             return "error"
         return symbol.data_type
 
@@ -233,7 +236,7 @@ class SemanticAnalyzer:
         if args_node:
             self._visit_Arguments(args_node, scope)
         if callee_type not in {"function", "unknown", "error"}:
-            self._error("Solo se pueden invocar funciones o referencias desconocidas")
+            self._error("Solo se pueden invocar funciones o referencias desconocidas", node)
         return "unknown"
 
     def _visit_Arguments(self, node, scope):
@@ -257,7 +260,7 @@ class SemanticAnalyzer:
         if base_symbol and base_symbol.kind == "builtin":
             allowed = base_symbol.members
             if member_name not in allowed:
-                self._error(f"El miembro '{member_name}' no existe en '{base_symbol.name}'")
+                self._error(f"El miembro '{member_name}' no existe en '{base_symbol.name}'", member_node)
                 return "error"
             return allowed[member_name]
         return "unknown"
@@ -285,7 +288,9 @@ class SemanticAnalyzer:
             "Otros Atributos": ", ".join(others) if others else "-",
         }
 
-    def _error(self, message):
+    def _error(self, message, node=None):
+        if node and getattr(node, "linea", None) is not None:
+            message = f"{message} (linea {node.linea}, columna {node.columna})"
         self.errors.append(message)
 
     def _is_numeric(self, data_type):

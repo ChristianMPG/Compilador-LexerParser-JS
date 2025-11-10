@@ -4,6 +4,7 @@ from typing import Dict, List
 import pandas as pd
 import streamlit as st
 
+from codegen import BytecodeGenerator
 from lexer.lexer import Lexer
 from parser.parser import Parser
 from semantic.semantic import SemanticAnalyzer
@@ -17,18 +18,21 @@ def load_samples() -> Dict[str, Path]:
 
 
 def build_ast_graph_dot(node):
-    nodes = []
-    edges = []
+    nodes: List[str] = []
+    edges: List[str] = []
 
-    def add_node(n):
-        if n is None:
+    def add_node(current):
+        if current is None:
             return None
-        node_id = f"node{id(n)}"
-        value = "" if n.valor in (None, "") else str(n.valor)
+        node_id = f"node{id(current)}"
+        value = "" if current.valor in (None, "") else str(current.valor)
         value = value.replace("\\", "\\\\").replace('"', '\\"')
-        label = n.tipo if not value else f"{n.tipo}\\n{value}"
-        nodes.append(f'{node_id} [label="{label}", shape=box, style="rounded,filled", fillcolor="#1f2a44", fontcolor="#f0f3ff"];')
-        for child in n.hijos:
+        label = current.tipo if not value else f"{current.tipo}\\n{value}"
+        nodes.append(
+            f'{node_id} [label="{label}", shape=box, style="rounded,filled", '
+            'fillcolor="#1f2a44", fontcolor="#f0f3ff"];'
+        )
+        for child in current.hijos:
             child_id = add_node(child)
             if child_id:
                 edges.append(f"{node_id} -> {child_id};")
@@ -39,7 +43,7 @@ def build_ast_graph_dot(node):
         return ""
     dot = [
         "digraph AST {",
-        'rankdir=TB;',
+        "rankdir=TB;",
         'bgcolor="transparent";',
         *nodes,
         *edges,
@@ -64,6 +68,9 @@ def run_compiler(source: str):
     semantic_errors = semantic.analyze(ast)
     symbol_rows = semantic.get_symbol_rows()
 
+    codegen = BytecodeGenerator()
+    bytecode = codegen.generate(ast)
+
     graph_dot = build_ast_graph_dot(parser.arbol) if parser.arbol else ""
 
     return {
@@ -72,6 +79,7 @@ def run_compiler(source: str):
         "semantic_errors": semantic_errors,
         "symbols": symbol_rows,
         "graph_dot": graph_dot,
+        "bytecode": bytecode,
     }
 
 
@@ -129,7 +137,7 @@ def main():
             </h1>
             <p style="opacity:0.85;">
                 Visualiza cada fase del compilador educativo para un subconjunto de JavaScript.<br/>
-                Edita un ejemplo, compila y explora tokens, AST, tabla de símbolos y errores en un solo lugar.
+                Edita un ejemplo, compila y explora tokens, AST, bytecode, tabla de símbolos y errores en un solo lugar.
             </p>
         </div>
         """,
@@ -160,12 +168,16 @@ def main():
         session.code_editor = samples[selected].read_text(encoding="utf-8")
 
     with actions_col:
-        save_toggle = st.checkbox("Guardar en disco", value=False, help="Escribe los cambios directamente en el archivo.")
+        save_toggle = st.checkbox(
+            "Guardar en disco",
+            value=False,
+            help="Escribe los cambios directamente en el archivo.",
+        )
 
     st.text_area(
-        "Código fuente",
+        "Codigo fuente",
         key="code_editor",
-        help="Puedes editar libremente este código antes de compilar.",
+        help="Puedes editar libremente este codigo antes de compilar.",
     )
 
     compile_clicked = st.button("Compilar", use_container_width=True)
@@ -191,13 +203,14 @@ def main():
     semantic_errors: List[str] = result["semantic_errors"]
     symbols = result["symbols"]
     graph_dot = result["graph_dot"]
+    bytecode = result["bytecode"]
 
-    metric_col1, metric_col2, metric_col3 = st.columns(3)
-    metric_col1.metric("Tokens", len(token_rows))
-    metric_col2.metric("Errores sintácticos", len(syntax_errors), delta=None)
-    metric_col3.metric("Errores semánticos", len(semantic_errors), delta=None)
+    col_metrics = st.columns(3)
+    col_metrics[0].metric("Tokens", len(token_rows))
+    col_metrics[1].metric("Errores sintacticos", len(syntax_errors))
+    col_metrics[2].metric("Errores semanticos", len(semantic_errors))
 
-    tabs = st.tabs(["Tokens y símbolos", "AST", "Errores"])
+    tabs = st.tabs(["Tokens y simbolos", "AST", "Bytecode", "Errores"])
     with tabs[0]:
         tok_col, sym_col = st.columns(2)
         with tok_col:
@@ -207,32 +220,38 @@ def main():
             else:
                 st.write("No se generaron tokens.")
         with sym_col:
-            st.markdown("#### Tabla de símbolos")
+            st.markdown("#### Tabla de simbolos")
             if symbols:
                 st.dataframe(pd.DataFrame(symbols), use_container_width=True)
             else:
-                st.write("Tabla de símbolos vacía.")
+                st.write("Tabla de simbolos vacia.")
     with tabs[1]:
         if graph_dot:
             st.graphviz_chart(graph_dot)
         else:
             st.write("No se pudo construir el AST.")
     with tabs[2]:
+        st.markdown("#### Bytecode generado")
+        if bytecode:
+            st.code("\n".join(bytecode), language="text")
+        else:
+            st.write("No se generó bytecode.")
+    with tabs[3]:
         col_syntax, col_semantic = st.columns(2)
         with col_syntax:
-            st.markdown("#### Sintácticos")
+            st.markdown("#### Sintacticos")
             if syntax_errors:
                 for err in syntax_errors:
                     st.error(err)
             else:
-                st.success("Sin errores sintácticos.")
+                st.success("Sin errores sintacticos.")
         with col_semantic:
-            st.markdown("#### Semánticos")
+            st.markdown("#### Semanticos")
             if semantic_errors:
                 for err in semantic_errors:
                     st.error(err)
             else:
-                st.success("Sin errores semánticos.")
+                st.success("Sin errores semanticos.")
 
 
 if __name__ == "__main__":

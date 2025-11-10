@@ -3,6 +3,7 @@ class Compilador:
         # Carga el archivo fuente y prepara los módulos léxico, sintáctico y semántico
         from lexer.lexer import Lexer
         from semantic.semantic import SemanticAnalyzer
+        from codegen import BytecodeGenerator
 
         self.ruta_archivo = ruta_archivo
         with open(ruta_archivo, "r", encoding="utf-8") as f:
@@ -11,6 +12,7 @@ class Compilador:
         self.tokens = []
         self.parser = None
         self.semantic = SemanticAnalyzer()
+        self.codegen = BytecodeGenerator()
 
     def ejecutar(self):
         # Ejecuta el análisis completo y muestra tokens, AST, tabla de símbolos y errores
@@ -40,6 +42,11 @@ class Compilador:
             print("\nErrores semánticos:")
             for e in errores_semanticos:
                 print(e)
+
+        bytecode = self.codegen.generate(arbol)
+        print("\nBytecode generado:")
+        for instr in bytecode:
+            print(instr)
 
 
 if __name__ == "__main__":
